@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd mri-analyzer && npm run build",
+  "outputDirectory": "mri-analyzer/.next",
+  "installCommand": "cd mri-analyzer && npm install"
+}
