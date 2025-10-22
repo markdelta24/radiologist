@@ -1,0 +1,362 @@
+'use client';
+
+import { useState, useRef } from 'react';
+import { ClientVideoProcessor } from '@/lib/clientVideoProcessor';
+import { DicomProcessor } from '@/lib/dicomProcessor';
+import { uploadVideoToSupabase } from '@/lib/supabase';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
+interface SinglePageUploadProps {
+  onAnalysisStart: () => void;
+  onAnalysisComplete: (results: any) => void;
+  isAnalyzing: boolean;
+}
+
+export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, isAnalyzing }: SinglePageUploadProps) {
+  const [uploadMode, setUploadMode] = useState<'video' | 'dicom'>('video');
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [problem, setProblem] = useState('');
+  const [steps, setSteps] = useState<string[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [dicomFiles, setDicomFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dicomInputRef = useRef<HTMLInputElement>(null);
+  const fps = 5; // Fixed at 5 FPS
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      if (uploadMode === 'video') {
+        setSelectedFile(files[0]);
+      } else {
+        // DICOM mode - accept multiple files
+        const fileArray = Array.from(files).filter(file =>
+          file.name.endsWith('.dcm') || file.name.endsWith('.dicom')
+        );
+        setDicomFiles(fileArray);
+      }
+    }
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      if (uploadMode === 'video') {
+        setSelectedFile(files[0]);
+      } else {
+        // DICOM mode - accept multiple files
+        const fileArray = Array.from(files);
+        setDicomFiles(fileArray);
+      }
+    }
+  };
+
+  const handleDicomClick = () => {
+    if (!isAnalyzing) {
+      dicomInputRef.current?.click();
+    }
+  };
+
+  const validateFile = (file: File): { valid: boolean; error?: string } => {
+    const validTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/wmv'];
+    const maxSize = 100 * 1024 * 1024; // 100MB
+
+    if (!validTypes.includes(file.type)) {
+      return { valid: false, error: 'Please upload a valid video file (MP4, AVI, MOV, WMV)' };
+    }
+
+    if (file.size > maxSize) {
+      return { valid: false, error: 'File size must be less than 100MB' };
+    }
+
+    return { valid: true };
+  };
+
+  const handleProceed = async () => {
+    if (!selectedFile) {
+      alert('Please select a video file first');
+      return;
+    }
+
+    if (!problem.trim()) {
+      alert('Please describe the clinical problem or question');
+      return;
+    }
+
+    const validation = validateFile(selectedFile);
+    if (!validation.valid) {
+      alert(validation.error);
+      return;
+    }
+
+    onAnalysisStart();
+    setUploadProgress(0);
+    setSteps([]);
+
+    try {
+      // Upload video to Supabase Storage
+      setUploadProgress(5);
+      setSteps(['Uploading video to Supabase Storage']);
+      const timestamp = Date.now();
+      const fileName = `${timestamp}-${selectedFile.name}`;
+      const { path: videoPath, url: videoUrl } = await uploadVideoToSupabase(selectedFile, fileName);
+
+      setUploadProgress(10);
+      setSteps(prev => [...prev, 'Video uploaded successfully']);
+      console.log(`Video uploaded to Supabase: ${videoUrl}`);
+
+      // Extract frames on client side
+      setSteps(prev => [...prev, 'Extracting frames from video']);
+      const videoProcessor = new ClientVideoProcessor();
+
+      setUploadProgress(20);
+      const frames = await videoProcessor.extractFrames(selectedFile, {
+        fps,
+        maxFrames: Math.min(fps * 30, 200) // Limit frames based on FPS
+      });
+
+      setUploadProgress(40);
+      setSteps(prev => [...prev, `Extracted ${frames.length} frames`]);
+      console.log(`Extracted ${frames.length} frames`);
+
+      // Prepare form data with extracted frames and Supabase video URL
+      const formData = new FormData();
+      formData.append('frameCount', frames.length.toString());
+      formData.append('fps', fps.toString());
+      formData.append('videoUrl', videoUrl);
+      formData.append('videoPath', videoPath);
+
+      // Add each frame as base64 data
+      frames.forEach((frame, index) => {
+        formData.append(`frame_${index}`, frame.dataUrl);
+        formData.append(`timestamp_${index}`, frame.timestamp.toString());
+      });
+
+      // Include problem statement
+      formData.append('problem', problem.trim());
+
+      setUploadProgress(50);
+      setSteps(prev => [...prev, 'Sending frames for AI analysis']);
+
+      // Send to server for AI analysis
+      const response = await fetch('/api/analyze-frames', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Analysis failed');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentStep: string | undefined;
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // Try to process any trailing buffered line
+            const trailing = buffer.trim();
+            if (trailing.startsWith('data: ')) {
+              try {
+                const jsonString = trailing.slice(6).trim();
+                if (jsonString) {
+                  const data = JSON.parse(jsonString);
+                  if (data.results) {
+                    onAnalysisComplete(data.results);
+                    setUploadProgress(100);
+                  }
+                }
+              } catch (e) {
+                console.error('Error parsing trailing SSE data:', e, 'Line:', trailing);
+              }
+            }
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete lines; keep remainder in buffer
+          let newlineIndex = buffer.indexOf('\n');
+          while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf('\n');
+
+            if (line.startsWith('data: ')) {
+              try {
+                const jsonString = line.slice(6).trim();
+                if (!jsonString) continue;
+
+                const data = JSON.parse(jsonString);
+                if (data.progress !== undefined) {
+                  // Map server progress (50-100) to our range (50-100)
+                  const adjustedProgress = 50 + (data.progress / 100) * 50;
+                  setUploadProgress(adjustedProgress);
+                }
+                if (data.step && data.step !== currentStep) {
+                  currentStep = data.step;
+                  setSteps(prev => {
+                    if (prev[prev.length - 1] === data.step) return prev;
+                    return [...prev, data.step];
+                  });
+                }
+                if (data.results) {
+                  onAnalysisComplete(data.results);
+                  setUploadProgress(100);
+                  setSteps(prev => [...prev, 'completed']);
+                }
+                if (data.error) {
+                  alert(`Error: ${data.error}`);
+                  onAnalysisComplete(null);
+                  setUploadProgress(0);
+                  setSteps(prev => [...prev, 'error']);
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e, 'Line:', line);
+              }
+            }
+          }
+        }
+      }
+
+      // Cleanup
+      videoProcessor.cleanup();
+
+    } catch (error) {
+      console.error('Processing error:', error);
+      alert(`Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      onAnalysisComplete(null);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleClick = () => {
+    if (!isAnalyzing) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  return (
+    <Card className="space-y-6">
+      <CardContent className="pt-6 space-y-6">
+        {/* Video Upload Section */}
+        <div>
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Upload Video</h2>
+          <div
+            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            dragActive
+              ? 'border-blue-500 bg-blue-50'
+              : 'border-gray-300 hover:border-gray-400'
+          } ${isAnalyzing ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          onClick={handleClick}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            onChange={handleFileInput}
+            className="hidden"
+            disabled={isAnalyzing}
+          />
+
+          {!isAnalyzing ? (
+            <>
+              <div className="mx-auto w-12 h-12 text-gray-400 mb-4">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 48 48">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                {selectedFile ? selectedFile.name : 'Upload Video'}
+              </h3>
+              <p className="text-gray-600 mb-4">
+                {selectedFile ? 'File selected - ready to proceed' : 'Drag and drop your CT video here, or click to browse'}
+              </p>
+              <p className="text-sm text-gray-500">
+                Supports MP4, AVI, MOV, WMV (max 100MB)
+              </p>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex justify-center">
+                <Spinner className="w-12 h-12" />
+              </div>
+              <h3 className="text-lg font-medium text-gray-900">
+                Processing Video...
+              </h3>
+              <Progress value={uploadProgress} className="w-full" />
+              <div className="text-sm text-gray-600 space-y-2">
+                {steps.map((s, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-xs">
+                      {s.replaceAll('_', ' ')}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          </div>
+        </div>
+
+        {/* Problem Input Section */}
+        <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Clinical Problem / Question *
+        </label>
+        <textarea
+          value={problem}
+          onChange={(e) => setProblem(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 h-24"
+          placeholder="e.g., Persistent chest pain and shortness of breath; rule out pulmonary embolism or mass."
+          disabled={isAnalyzing}
+          />
+        </div>
+
+        {/* Proceed Button */}
+        <div className="text-center">
+        <Button
+          onClick={handleProceed}
+          disabled={isAnalyzing || !selectedFile || !problem.trim()}
+          size="lg"
+          className="px-8"
+        >
+          {isAnalyzing ? 'Processing...' : 'Proceed with Analysis'}
+        </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

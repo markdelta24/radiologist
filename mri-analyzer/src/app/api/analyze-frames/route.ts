@@ -1,0 +1,382 @@
+import { NextRequest } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import fs from 'fs/promises';
+import path from 'path';
+
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+const GEMINI_BATCH_SIZE = parseInt(process.env.GEMINI_BATCH_SIZE || '3', 10);
+const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '3', 10);
+const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '500', 10);
+
+interface FrameAnalysis {
+  frameNumber: number;
+  analysis: string;
+  confidence: number;
+  findings: string[];
+  timestamp: number;
+}
+
+interface OverallAnalysis {
+  summary: string;
+  recommendations: string[];
+  urgency: 'low' | 'medium' | 'high';
+  frameAnalyses: FrameAnalysis[];
+}
+
+export async function POST(request: NextRequest) {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let heartbeat: any;
+      try {
+        // Heartbeat to keep SSE connection alive
+        heartbeat = setInterval(() => {
+          try { controller.enqueue(encoder.encode(`: keep-alive\n\n`)); } catch {}
+        }, 15000);
+        // Send initial progress
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 5, step: 'received_request' })}\n\n`));
+
+        // Parse the form data
+        const formData = await request.formData();
+        const frameCount = parseInt(formData.get('frameCount') as string || '0');
+        const problem = (formData.get('problem') as string) || '';
+
+        if (frameCount === 0) {
+          throw new Error('No frames provided');
+        }
+
+        // Problem statement (single input)
+        const problemStatement = problem.trim();
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 10, step: 'parsing_form_data' })}\n\n`));
+
+        // Create temp directory for frames
+        const tempDir = path.join(process.cwd(), 'temp');
+        const framesDir = path.join(tempDir, `frames_${Date.now()}`);
+        await fs.mkdir(tempDir, { recursive: true });
+        await fs.mkdir(framesDir, { recursive: true });
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'saving_frames' })}\n\n`));
+
+        // Extract frame data from form and save to files
+        const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string }[] = [];
+
+        for (let i = 0; i < frameCount; i++) {
+          const dataUrl = formData.get(`frame_${i}`) as string;
+          const timestamp = parseFloat(formData.get(`timestamp_${i}`) as string || '0');
+
+          if (dataUrl) {
+            // Save frame as image file
+            const frameFileName = `frame_${String(i + 1).padStart(3, '0')}.png`;
+            const framePath = path.join(framesDir, frameFileName);
+
+            // Convert base64 to buffer and save
+            const base64Data = dataUrl.split(',')[1];
+            const buffer = Buffer.from(base64Data, 'base64');
+            await fs.writeFile(framePath, buffer);
+
+            frames.push({
+              dataUrl,
+              timestamp,
+              frameNumber: i + 1,
+              filePath: framePath
+            });
+
+            console.log(`Saved frame ${i + 1} to: ${framePath}`);
+          }
+        }
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 20, step: 'frames_saved', frameCount: frames.length })}\n\n`));
+
+        // Analyze all frames in a single Gemini call
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 30, step: 'preparing_model', mode: 'single-call' })}\n\n`));
+        const { overall, perFrame } = await analyzeAllFramesWithGemini(frames, problemStatement);
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 90, step: 'parsing_results' })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 95, step: 'finalizing' })}\n\n`));
+
+        // Send final results
+        const results: OverallAnalysis = {
+          ...overall,
+          frameAnalyses: perFrame
+        };
+
+        // Cleanup temp files
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 96, step: 'cleanup' })}\n\n`));
+        await cleanup(framesDir);
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 100, results })}\n\n`));
+        clearInterval(heartbeat);
+        controller.close();
+
+      } catch (error) {
+        console.error('Analysis error:', error);
+
+        let errorMessage = 'Analysis failed';
+        if (error instanceof Error) {
+          errorMessage = `Error: ${error.message}`;
+        }
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errorMessage })}\n\n`));
+        if (heartbeat) clearInterval(heartbeat);
+        controller.close();
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+async function analyzeAllFramesWithGemini(frames: { dataUrl: string; timestamp: number; frameNumber: number }[], problem: string): Promise<{ overall: Omit<OverallAnalysis, 'frameAnalyses'>; perFrame: FrameAnalysis[] }> {
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+
+  const prompt = `Analyze these medical images as an expert radiologist and provide a comprehensive, detailed radiology report.
+
+PATIENT PROBLEM:
+${problem || 'Not specified'}
+
+IMPORTANT INSTRUCTIONS:
+- Do NOT include any introductory phrases like "Of course" or "As an expert radiologist"
+- Do NOT include headers like "EXPERT RADIOLOGY REPORT"
+- Do NOT include template patient information fields (PATIENT:, EXAM DATE:, EXAM TYPE:, CLINICAL HISTORY:)
+- Do NOT include any educational disclaimers or statements about this being for educational purposes
+- Start directly with your medical findings organized under clear section headings (FINDINGS, IMPRESSION, RECOMMENDATION)
+- Provide a professional, direct medical report without any preamble or disclaimers
+
+REQUIRED DETAIL LEVEL:
+- Provide EXTENSIVE and DETAILED descriptions of all anatomical structures visible
+- Describe the SIZE, LOCATION, SIGNAL CHARACTERISTICS, and MORPHOLOGY of any abnormalities in great detail
+- Include measurements where applicable (approximate sizes in millimeters or centimeters)
+- Describe the relationship of abnormal findings to surrounding structures
+- Provide detailed differential diagnosis with explanations for each possibility
+- Explain the clinical significance of each finding
+- Include systematic review of all visible anatomical structures, even if normal
+- Use precise anatomical terminology and be thorough in your descriptions
+- The report should be comprehensive and detailed, not brief or summarized
+- Aim for at least 3-4 paragraphs in the FINDINGS section with detailed observations
+`;
+
+  const contents: any[] = [{ text: prompt }];
+  for (const f of frames) {
+    const base64Data = f.dataUrl.split(',')[1];
+    const mimeType = f.dataUrl.split(';')[0].split(':')[1] || 'image/png';
+    contents.push({ inlineData: { data: base64Data, mimeType } });
+    contents.push({ text: `Frame ${f.frameNumber} at ${f.timestamp.toFixed(2)}s` });
+  }
+
+  const response = await withRetry(() => model.generateContent(contents), {
+    label: 'all-frames',
+    maxRetries: GEMINI_MAX_RETRIES,
+    baseDelayMs: GEMINI_RETRY_BASE_DELAY_MS,
+  });
+
+  const text = response.response.text() || '';
+  const parsed = parseOverallJson(text);
+  if (parsed) {
+    // Ensure timestamps are present
+    const frameMap = new Map(frames.map(f => [f.frameNumber, f.timestamp] as const));
+    const per = (parsed.frameAnalyses || []).map((fa: any) => ({
+      frameNumber: Number(fa.frameNumber) || 0,
+      timestamp: typeof fa.timestamp === 'number' ? fa.timestamp : (frameMap.get(Number(fa.frameNumber)) || 0),
+      analysis: String(fa.analysis || ''),
+      confidence: Math.max(0, Math.min(1, Number(fa.confidence) || 0.6)),
+      findings: Array.isArray(fa.findings) ? fa.findings.map(String) : []
+    }));
+
+    const overall = {
+      summary: String(parsed.summary || ''),
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.map(String) : [],
+      urgency: (parsed.urgency === 'high' || parsed.urgency === 'medium') ? parsed.urgency : 'low' as const,
+    };
+
+    return { overall, perFrame: per };
+  }
+
+  // Fallback if JSON parsing failed
+  const urgency = extractUrgency(text);
+  const overall = {
+    summary: text || 'No analysis generated',
+    recommendations: extractRecommendations(text),
+    urgency
+  };
+  return { overall, perFrame: [] };
+}
+
+function parseOverallJson(text: string): any | null {
+  try {
+    const direct = JSON.parse(text);
+    return direct;
+  } catch {}
+  // Try to extract JSON block
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    const candidate = text.slice(start, end + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+  return null;
+}
+
+function extractRecommendations(text: string): string[] {
+  const recommendations: string[] = [];
+  const recSection = text.match(/recommendations?[:\s]*([\s\S]*?)(?:urgency|$)/i);
+  if (recSection) {
+    const lines = recSection[1].split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && /^[\d\-\*•]/.test(trimmed)) {
+        recommendations.push(trimmed.replace(/^[\d\-\*•]\s*/, ''));
+      }
+    }
+  }
+  if (recommendations.length === 0) {
+    recommendations.push('Follow up with clinician');
+    recommendations.push('Consider additional imaging if symptoms persist');
+  }
+  return recommendations;
+}
+
+function extractUrgency(text: string): 'low' | 'medium' | 'high' {
+  const t = text.toLowerCase();
+  if (t.includes('high') || t.includes('urgent') || t.includes('immediate')) return 'high';
+  if (t.includes('medium') || t.includes('moderate')) return 'medium';
+  return 'low';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableError(error: any): { retryable: boolean; reason: string; status?: number } {
+  // Known network hiccups or service-side transient errors
+  const transientNodeErrors = ['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'];
+  const code = (error && (error.code || error.cause?.code)) as string | undefined;
+  const status = (error && (error.status || error.cause?.status)) as number | undefined;
+
+  if (typeof status === 'number') {
+    if (status === 429) return { retryable: true, reason: 'rate_limited', status };
+    if (status >= 500) return { retryable: true, reason: 'server_error', status };
+  }
+
+  if (code && transientNodeErrors.includes(code)) {
+    return { retryable: true, reason: code };
+  }
+
+  // Some Google SDK errors wrap details in message
+  const msg = String(error?.message || '').toLowerCase();
+  if (msg.includes('service is currently unavailable') || msg.includes('timeout')) {
+    return { retryable: true, reason: 'transient_message', status };
+  }
+
+  return { retryable: false, reason: 'non_retryable', status };
+}
+
+async function withRetry<T>(fn: () => Promise<T>, opts?: { label?: string; maxRetries?: number; baseDelayMs?: number }): Promise<T> {
+  const label = opts?.label || 'gemini-call';
+  const maxRetries = Number.isFinite(opts?.maxRetries) ? (opts?.maxRetries as number) : 3;
+  const baseDelay = Number.isFinite(opts?.baseDelayMs) ? (opts?.baseDelayMs as number) : 500;
+
+  let attempt = 0;
+  // attempts = 1 + maxRetries total tries
+  while (true) {
+    attempt += 1;
+    try {
+      return await fn();
+    } catch (err) {
+      const { retryable, reason, status } = isRetryableError(err);
+      const isLast = attempt > maxRetries;
+
+      if (!retryable || isLast) {
+        if (!retryable) {
+          console.error(`[${label}] non-retryable error on attempt ${attempt}:`, { reason, status, message: (err as any)?.message });
+        } else {
+          console.error(`[${label}] giving up after ${attempt} attempts`, { reason, status, message: (err as any)?.message });
+        }
+        throw err;
+      }
+
+      // Exponential backoff with jitter
+      const backoff = baseDelay * Math.pow(2, attempt - 1);
+      const jitter = Math.floor(Math.random() * baseDelay);
+      const delay = Math.min(backoff + jitter, 10_000); // cap at 10s to keep UX responsive
+      console.warn(`[${label}] retrying after transient error`, { attempt, reason, status, delayMs: delay });
+      await sleep(delay);
+    }
+  }
+}
+
+function extractFindings(text: string): string[] {
+  // Simple extraction of key findings from the analysis text
+  const findings: string[] = [];
+
+  // Look for bullet points or numbered lists
+  const lines = text.split('\\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.match(/^[\\d\\-\\*•]\\s*/)) {
+      findings.push(trimmed.replace(/^[\\d\\-\\*•]\\s*/, ''));
+    }
+  }
+
+  // If no structured findings found, extract sentences that seem like findings
+  if (findings.length === 0) {
+    const sentences = text.split(/[.!?]+/);
+    for (const sentence of sentences) {
+      if (sentence.toLowerCase().includes('visible') ||
+          sentence.toLowerCase().includes('shows') ||
+          sentence.toLowerCase().includes('appears') ||
+          sentence.toLowerCase().includes('indicates')) {
+        findings.push(sentence.trim());
+      }
+    }
+  }
+
+  return findings.slice(0, 5); // Limit to top 5 findings
+}
+
+function extractConfidence(text: string): number {
+  // Look for confidence indicators in the text
+  const confidenceRegex = /confidence[:\\s]*(\\d+(?:\\.\\d+)?)[%]?/i;
+  const match = text.match(confidenceRegex);
+
+  if (match) {
+    const value = parseFloat(match[1]);
+    return value > 1 ? value / 100 : value;
+  }
+
+  // Default confidence based on text content quality
+  if (text.length > 200 && !text.includes('error') && !text.includes('unclear')) {
+    return 0.8;
+  } else if (text.length > 100) {
+    return 0.6;
+  } else {
+    return 0.4;
+  }
+}
+
+// Removed legacy summarizer helpers; single-call analysis returns overall + per-frame
+
+async function cleanup(framesDir: string): Promise<void> {
+  try {
+    console.log(`Cleaning up frames directory: ${framesDir}`);
+    const files = await fs.readdir(framesDir);
+    for (const file of files) {
+      await fs.unlink(path.join(framesDir, file));
+    }
+    await fs.rmdir(framesDir);
+    console.log(`Successfully cleaned up ${files.length} frame files`);
+  } catch (error) {
+    console.error('Cleanup error:', error);
+  }
+}
