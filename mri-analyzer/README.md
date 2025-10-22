@@ -21,7 +21,7 @@ Before running this application, make sure you have:
 
 ### Video Processing (No External Dependencies Required!)
 
-✅ **No FFmpeg installation needed!** This application uses pure JavaScript video processing libraries that work out of the box:
+**No FFmpeg installation needed!** This application uses pure JavaScript video processing libraries that work out of the box:
 
 - **video-thumbnail**: Lightweight frame extraction (primary method)
 - **ffmpeg-extract-frames**: Alternative extraction method (fallback)
@@ -144,7 +144,7 @@ The application offers configurable frame extraction rates to balance analysis d
 - **Advanced Reasoning**: Multi-step thinking for deeper image insights
 - **Context Understanding**: 400K token context for comprehensive analysis
 
-⚠️ **Medical Disclaimer**: This application is for educational and research purposes only. GPT-5 analysis should never replace professional medical diagnosis or treatment. Always consult qualified healthcare providers for medical concerns.
+**Medical Disclaimer**: This application is for educational and research purposes only. GPT-5 analysis should never replace professional medical diagnosis or treatment. Always consult qualified healthcare providers for medical concerns.
 
 ## Development
 
