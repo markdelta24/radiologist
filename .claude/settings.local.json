@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__context7__get-library-docs",
+      "WebSearch",
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(dir:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(echo:*)",
+      "Bash(sleep:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(git:*)",
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "mcp__shadcn__*",
+      "mcp__supabase__*",
+      "mcp__context7__resolve-library-id",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__execute_sql"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "enabledMcpjsonServers": [
+    "supabase",
+    "shadcn"
+  ],
+  "enableAllProjectMcpServers": true
+}

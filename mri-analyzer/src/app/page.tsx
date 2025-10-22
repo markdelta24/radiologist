@@ -6,19 +6,25 @@ import SinglePageUpload from '@/components/SinglePageUpload';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
-interface ProblemInfo { problem: string }
-
 type Step = 'upload' | 'results';
+
+interface AnalysisResultsType {
+  summary?: string;
+  recommendations?: string[];
+  urgency?: 'low' | 'medium' | 'high';
+}
 
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<Step>('upload');
-  const [analysisResults, setAnalysisResults] = useState<any>(null);
+  const [analysisResults, setAnalysisResults] = useState<AnalysisResultsType | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const handleAnalysisComplete = (results: any) => {
+  const handleAnalysisComplete = (results: AnalysisResultsType | null) => {
     setAnalysisResults(results);
     setIsAnalyzing(false);
-    setCurrentStep('results');
+    if (results) {
+      setCurrentStep('results');
+    }
   };
 
   const handleAnalysisStart = () => {

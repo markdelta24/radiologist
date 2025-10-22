@@ -7,9 +7,15 @@ interface ProblemInfo {
   problem: string;
 }
 
+interface AnalysisResults {
+  summary?: string;
+  recommendations?: string[];
+  urgency?: 'low' | 'medium' | 'high';
+}
+
 interface VideoUploadProps {
   onAnalysisStart: () => void;
-  onAnalysisComplete: (results: any) => void;
+  onAnalysisComplete: (results: AnalysisResults | null) => void;
   onBack?: () => void;
   isAnalyzing: boolean;
   problemInfo?: ProblemInfo | null;

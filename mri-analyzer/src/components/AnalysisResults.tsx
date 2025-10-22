@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 
 interface AnalysisResultsProps {
-  results: any;
+  results: OverallAnalysis | null;
   isAnalyzing: boolean;
 }
 
@@ -26,8 +26,8 @@ interface OverallAnalysis {
 
 function formatSummaryAsMarkdown(summary: string): string {
   // Split into lines and process medical report structure
-  let lines = summary.split('\n');
-  let formatted: string[] = [];
+  const lines = summary.split('\n');
+  const formatted: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i].trim();
@@ -104,15 +104,6 @@ export default function AnalysisResults({ results, isAnalyzing }: AnalysisResult
 
   const analysis: OverallAnalysis = results;
 
-  const getUrgencyColor = (urgency: string) => {
-    switch (urgency) {
-      case 'high': return 'text-red-600 bg-red-50 border-red-200';
-      case 'medium': return 'text-yellow-600 bg-yellow-50 border-yellow-200';
-      case 'low': return 'text-green-600 bg-green-50 border-green-200';
-      default: return 'text-gray-600 bg-gray-50 border-gray-200';
-    }
-  };
-
   const getUrgencyVariant = (urgency: string): "default" | "secondary" | "destructive" | "outline" => {
     switch (urgency) {
       case 'high': return 'destructive';
@@ -141,15 +132,15 @@ export default function AnalysisResults({ results, isAnalyzing }: AnalysisResult
           <div className="text-gray-800 leading-relaxed prose prose-sm sm:prose-base max-w-none font-['Helvetica',_'Arial',_sans-serif]">
             <ReactMarkdown
               components={{
-                h1: ({node, ...props}) => <h1 className="text-xl sm:text-2xl font-bold text-gray-900 mt-6 sm:mt-8 mb-3 sm:mb-4 border-b-2 border-gray-200 pb-2" {...props} />,
-                h2: ({node, ...props}) => <h2 className="text-lg sm:text-xl font-bold text-gray-900 mt-4 sm:mt-6 mb-2 sm:mb-3 uppercase tracking-wide" {...props} />,
-                h3: ({node, ...props}) => <h3 className="text-base sm:text-lg font-semibold text-gray-800 mt-3 sm:mt-4 mb-2" {...props} />,
-                p: ({node, ...props}) => <p className="mb-2 sm:mb-3 text-sm sm:text-base leading-6 sm:leading-7 text-gray-700" {...props} />,
-                strong: ({node, ...props}) => <strong className="font-bold text-gray-900" {...props} />,
-                ul: ({node, ...props}) => <ul className="list-disc list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
-                ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
-                li: ({node, ...props}) => <li className="text-gray-700 text-sm sm:text-base leading-6 sm:leading-7" {...props} />,
-                code: ({node, ...props}) => <code className="bg-gray-100 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm font-mono text-gray-800" {...props} />,
+                h1: (props) => <h1 className="text-xl sm:text-2xl font-bold text-gray-900 mt-6 sm:mt-8 mb-3 sm:mb-4 border-b-2 border-gray-200 pb-2" {...props} />,
+                h2: (props) => <h2 className="text-lg sm:text-xl font-bold text-gray-900 mt-4 sm:mt-6 mb-2 sm:mb-3 uppercase tracking-wide" {...props} />,
+                h3: (props) => <h3 className="text-base sm:text-lg font-semibold text-gray-800 mt-3 sm:mt-4 mb-2" {...props} />,
+                p: (props) => <p className="mb-2 sm:mb-3 text-sm sm:text-base leading-6 sm:leading-7 text-gray-700" {...props} />,
+                strong: (props) => <strong className="font-bold text-gray-900" {...props} />,
+                ul: (props) => <ul className="list-disc list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
+                ol: (props) => <ol className="list-decimal list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
+                li: (props) => <li className="text-gray-700 text-sm sm:text-base leading-6 sm:leading-7" {...props} />,
+                code: (props) => <code className="bg-gray-100 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm font-mono text-gray-800" {...props} />,
               }}
             >
               {formatSummaryAsMarkdown(analysis.summary)}

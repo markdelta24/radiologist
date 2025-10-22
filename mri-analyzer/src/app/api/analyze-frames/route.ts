@@ -5,7 +5,6 @@ import path from 'path';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
-const GEMINI_BATCH_SIZE = parseInt(process.env.GEMINI_BATCH_SIZE || '3', 10);
 const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '3', 10);
 const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '500', 10);
 
@@ -29,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      let heartbeat: any;
+      let heartbeat: NodeJS.Timeout | undefined;
       try {
         // Heartbeat to keep SSE connection alive
         heartbeat = setInterval(() => {
@@ -165,7 +164,7 @@ REQUIRED DETAIL LEVEL:
 - Aim for at least 3-4 paragraphs in the FINDINGS section with detailed observations
 `;
 
-  const contents: any[] = [{ text: prompt }];
+  const contents: Array<{ text?: string; inlineData?: { data: string; mimeType: string } }> = [{ text: prompt }];
   for (const f of frames) {
     const base64Data = f.dataUrl.split(',')[1];
     const mimeType = f.dataUrl.split(';')[0].split(':')[1] || 'image/png';
@@ -211,19 +210,36 @@ REQUIRED DETAIL LEVEL:
   return { overall, perFrame: [] };
 }
 
-function parseOverallJson(text: string): any | null {
+interface ParsedOverallJson {
+  summary?: string;
+  recommendations?: string[];
+  urgency?: string;
+  frameAnalyses?: Array<{
+    frameNumber?: number;
+    timestamp?: number;
+    analysis?: string;
+    confidence?: number;
+    findings?: string[];
+  }>;
+}
+
+function parseOverallJson(text: string): ParsedOverallJson | null {
   try {
-    const direct = JSON.parse(text);
+    const direct = JSON.parse(text) as ParsedOverallJson;
     return direct;
-  } catch {}
+  } catch {
+    // Ignore parse errors
+  }
   // Try to extract JSON block
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start !== -1 && end !== -1 && end > start) {
     const candidate = text.slice(start, end + 1);
     try {
-      return JSON.parse(candidate);
-    } catch {}
+      return JSON.parse(candidate) as ParsedOverallJson;
+    } catch {
+      // Ignore parse errors
+    }
   }
   return null;
 }
@@ -258,11 +274,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRetryableError(error: any): { retryable: boolean; reason: string; status?: number } {
+interface ErrorWithCode {
+  code?: string;
+  status?: number;
+  message?: string;
+  cause?: {
+    code?: string;
+    status?: number;
+  };
+}
+
+function isRetryableError(error: unknown): { retryable: boolean; reason: string; status?: number } {
   // Known network hiccups or service-side transient errors
   const transientNodeErrors = ['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'];
-  const code = (error && (error.code || error.cause?.code)) as string | undefined;
-  const status = (error && (error.status || error.cause?.status)) as number | undefined;
+  const err = error as ErrorWithCode;
+  const code = (err && (err.code || err.cause?.code)) as string | undefined;
+  const status = (err && (err.status || err.cause?.status)) as number | undefined;
 
   if (typeof status === 'number') {
     if (status === 429) return { retryable: true, reason: 'rate_limited', status };
@@ -274,7 +301,7 @@ function isRetryableError(error: any): { retryable: boolean; reason: string; sta
   }
 
   // Some Google SDK errors wrap details in message
-  const msg = String(error?.message || '').toLowerCase();
+  const msg = String(err?.message || '').toLowerCase();
   if (msg.includes('service is currently unavailable') || msg.includes('timeout')) {
     return { retryable: true, reason: 'transient_message', status };
   }
@@ -299,9 +326,9 @@ async function withRetry<T>(fn: () => Promise<T>, opts?: { label?: string; maxRe
 
       if (!retryable || isLast) {
         if (!retryable) {
-          console.error(`[${label}] non-retryable error on attempt ${attempt}:`, { reason, status, message: (err as any)?.message });
+          console.error(`[${label}] non-retryable error on attempt ${attempt}:`, { reason, status, message: (err as ErrorWithCode)?.message });
         } else {
-          console.error(`[${label}] giving up after ${attempt} attempts`, { reason, status, message: (err as any)?.message });
+          console.error(`[${label}] giving up after ${attempt} attempts`, { reason, status, message: (err as ErrorWithCode)?.message });
         }
         throw err;
       }
@@ -315,57 +342,6 @@ async function withRetry<T>(fn: () => Promise<T>, opts?: { label?: string; maxRe
     }
   }
 }
-
-function extractFindings(text: string): string[] {
-  // Simple extraction of key findings from the analysis text
-  const findings: string[] = [];
-
-  // Look for bullet points or numbered lists
-  const lines = text.split('\\n');
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.match(/^[\\d\\-\\*•]\\s*/)) {
-      findings.push(trimmed.replace(/^[\\d\\-\\*•]\\s*/, ''));
-    }
-  }
-
-  // If no structured findings found, extract sentences that seem like findings
-  if (findings.length === 0) {
-    const sentences = text.split(/[.!?]+/);
-    for (const sentence of sentences) {
-      if (sentence.toLowerCase().includes('visible') ||
-          sentence.toLowerCase().includes('shows') ||
-          sentence.toLowerCase().includes('appears') ||
-          sentence.toLowerCase().includes('indicates')) {
-        findings.push(sentence.trim());
-      }
-    }
-  }
-
-  return findings.slice(0, 5); // Limit to top 5 findings
-}
-
-function extractConfidence(text: string): number {
-  // Look for confidence indicators in the text
-  const confidenceRegex = /confidence[:\\s]*(\\d+(?:\\.\\d+)?)[%]?/i;
-  const match = text.match(confidenceRegex);
-
-  if (match) {
-    const value = parseFloat(match[1]);
-    return value > 1 ? value / 100 : value;
-  }
-
-  // Default confidence based on text content quality
-  if (text.length > 200 && !text.includes('error') && !text.includes('unclear')) {
-    return 0.8;
-  } else if (text.length > 100) {
-    return 0.6;
-  } else {
-    return 0.4;
-  }
-}
-
-// Removed legacy summarizer helpers; single-call analysis returns overall + per-frame
 
 async function cleanup(framesDir: string): Promise<void> {
   try {

@@ -4,7 +4,7 @@ import { useState, useRef } from 'react';
 import { ClientVideoProcessor } from '@/lib/clientVideoProcessor';
 import { DicomProcessor } from '@/lib/dicomProcessor';
 import { uploadVideoToSupabase, uploadDicomFilesToSupabase } from '@/lib/supabase';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
@@ -12,9 +12,15 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
+interface AnalysisResults {
+  summary?: string;
+  recommendations?: string[];
+  urgency?: 'low' | 'medium' | 'high';
+}
+
 interface SinglePageUploadProps {
   onAnalysisStart: () => void;
-  onAnalysisComplete: (results: any) => void;
+  onAnalysisComplete: (results: AnalysisResults | null) => void;
   isAnalyzing: boolean;
 }
 
