@@ -259,7 +259,7 @@ ${problem || 'Not specified'}
 IMPORTANT INSTRUCTIONS:
 - Do NOT include any introductory phrases like "Of course" or "As an expert radiologist"
 - Do NOT include headers like "EXPERT RADIOLOGY REPORT"
-- Do NOT include template patient information fields (PATIENT:, EXAM DATE:, EXAM TYPE:, CLINICAL HISTORY:)
+- Generate a professional, neat;y formatted direct medical radiology report with Patient Information, Exam Date, Exam Type, Clinical History, and any other relevant information.
 - Do NOT include any educational disclaimers or statements about this being for educational purposes
 - Start directly with your medical findings organized under clear section headings (FINDINGS, IMPRESSION, RECOMMENDATION)
 - Provide a professional, direct medical report without any preamble or disclaimers
