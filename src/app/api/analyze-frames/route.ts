@@ -56,7 +56,9 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 10, step: 'parsing_form_data' })}\n\n`));
 
         // Create temp directory for frames
-        const tempDir = path.join(process.cwd(), 'temp');
+        // Use /tmp in production (Vercel) or local temp directory
+        const isProduction = process.env.VERCEL === '1';
+        const tempDir = isProduction ? '/tmp' : path.join(process.cwd(), 'temp');
         const framesDir = path.join(tempDir, `frames_${Date.now()}`);
         await fs.mkdir(tempDir, { recursive: true });
         await fs.mkdir(framesDir, { recursive: true });
