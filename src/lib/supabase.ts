@@ -121,3 +121,102 @@ export async function deletePatientFolderFromSupabase(folderPath: string) {
     await deleteDicomFilesFromSupabase(filePaths);
   }
 }
+
+/**
+ * Upload a frame image to Supabase Storage
+ * @param buffer - The image buffer
+ * @param fileName - The name to save the file as
+ * @param sessionId - The session/analysis ID for organizing frames
+ * @returns The path and URL of the uploaded frame
+ */
+export async function uploadFrameToSupabase(
+  buffer: Buffer,
+  fileName: string,
+  sessionId: string
+) {
+  const filePath = `${sessionId}/${fileName}`;
+
+  const { data, error } = await supabase.storage
+    .from('medical-frames')
+    .upload(filePath, buffer, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: 'image/png'
+    });
+
+  if (error) {
+    throw new Error(`Failed to upload frame: ${error.message}`);
+  }
+
+  // Get the public URL
+  const { data: urlData } = supabase.storage
+    .from('medical-frames')
+    .getPublicUrl(data.path);
+
+  return {
+    path: data.path,
+    url: urlData.publicUrl
+  };
+}
+
+/**
+ * Save analysis session to database
+ * @param sessionData - The analysis session data
+ */
+export async function saveAnalysisSession(sessionData: {
+  sessionId: string;
+  problemStatement?: string;
+  videoFilename?: string;
+  frameCount: number;
+  summary: string;
+  recommendations: string[];
+  urgency: 'low' | 'medium' | 'high';
+}) {
+  const { error } = await supabase
+    .from('analysis_sessions')
+    .insert({
+      session_id: sessionData.sessionId,
+      problem_statement: sessionData.problemStatement,
+      video_filename: sessionData.videoFilename,
+      frame_count: sessionData.frameCount,
+      summary: sessionData.summary,
+      recommendations: sessionData.recommendations,
+      urgency: sessionData.urgency
+    });
+
+  if (error) {
+    throw new Error(`Failed to save analysis session: ${error.message}`);
+  }
+}
+
+/**
+ * Save analysis frame to database
+ * @param frameData - The frame analysis data
+ */
+export async function saveAnalysisFrame(frameData: {
+  sessionId: string;
+  frameNumber: number;
+  timestamp: number;
+  analysis: string;
+  confidence: number;
+  findings: string[];
+  supabasePath?: string;
+  supabaseUrl?: string;
+}) {
+  const { error } = await supabase
+    .from('analysis_frames')
+    .insert({
+      session_id: frameData.sessionId,
+      frame_number: frameData.frameNumber,
+      timestamp: frameData.timestamp,
+      analysis: frameData.analysis,
+      confidence: frameData.confidence,
+      findings: frameData.findings,
+      supabase_path: frameData.supabasePath,
+      supabase_url: frameData.supabaseUrl
+    });
+
+  if (error) {
+    throw new Error(`Failed to save analysis frame: ${error.message}`);
+  }
+}

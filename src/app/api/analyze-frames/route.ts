@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs/promises';
 import path from 'path';
+import { uploadFrameToSupabase, saveAnalysisSession, saveAnalysisFrame } from '@/lib/supabase';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
@@ -14,6 +15,8 @@ interface FrameAnalysis {
   confidence: number;
   findings: string[];
   timestamp: number;
+  supabasePath?: string;
+  supabaseUrl?: string;
 }
 
 interface OverallAnalysis {
@@ -51,8 +54,9 @@ export async function POST(request: NextRequest) {
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 10, step: 'parsing_form_data' })}\n\n`));
 
-        // Create temp directory for frames
+        // Create temp directory for frames and session ID for Supabase
         const tempDir = path.join(process.cwd(), 'temp');
+        const sessionId = `analysis_${Date.now()}`;
         const framesDir = path.join(tempDir, `frames_${Date.now()}`);
         await fs.mkdir(tempDir, { recursive: true });
         await fs.mkdir(framesDir, { recursive: true });
@@ -60,7 +64,7 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'saving_frames' })}\n\n`));
 
         // Extract frame data from form and save to files
-        const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string }[] = [];
+        const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string; supabasePath?: string; supabaseUrl?: string }[] = [];
 
         for (let i = 0; i < frameCount; i++) {
           const dataUrl = formData.get(`frame_${i}`) as string;
@@ -76,14 +80,36 @@ export async function POST(request: NextRequest) {
             const buffer = Buffer.from(base64Data, 'base64');
             await fs.writeFile(framePath, buffer);
 
-            frames.push({
-              dataUrl,
-              timestamp,
-              frameNumber: i + 1,
-              filePath: framePath
-            });
+            // Upload to Supabase
+            try {
+              const { path: supabasePath, url: supabaseUrl } = await uploadFrameToSupabase(
+                buffer,
+                frameFileName,
+                sessionId
+              );
 
-            console.log(`Saved frame ${i + 1} to: ${framePath}`);
+              frames.push({
+                dataUrl,
+                timestamp,
+                frameNumber: i + 1,
+                filePath: framePath,
+                supabasePath,
+                supabaseUrl
+              });
+
+              console.log(`Saved frame ${i + 1} to: ${framePath}`);
+              console.log(`Uploaded frame ${i + 1} to Supabase: ${supabaseUrl}`);
+            } catch (error) {
+              console.error(`Failed to upload frame ${i + 1} to Supabase:`, error);
+              // Continue with local file only
+              frames.push({
+                dataUrl,
+                timestamp,
+                frameNumber: i + 1,
+                filePath: framePath
+              });
+              console.log(`Saved frame ${i + 1} to: ${framePath} (local only)`);
+            }
           }
         }
 
@@ -96,14 +122,56 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 90, step: 'parsing_results' })}\n\n`));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 95, step: 'finalizing' })}\n\n`));
 
+        // Merge Supabase URLs into frame analyses
+        const frameAnalysesWithUrls = perFrame.map((fa) => {
+          const frame = frames.find(f => f.frameNumber === fa.frameNumber);
+          return {
+            ...fa,
+            supabasePath: frame?.supabasePath,
+            supabaseUrl: frame?.supabaseUrl
+          };
+        });
+
         // Send final results
         const results: OverallAnalysis = {
           ...overall,
-          frameAnalyses: perFrame
+          frameAnalyses: frameAnalysesWithUrls
         };
 
+        // Save to database
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 96, step: 'saving_to_database' })}\n\n`));
+        try {
+          await saveAnalysisSession({
+            sessionId,
+            problemStatement,
+            frameCount: frames.length,
+            summary: overall.summary,
+            recommendations: overall.recommendations,
+            urgency: overall.urgency
+          });
+
+          // Save all frames to database
+          for (const fa of frameAnalysesWithUrls) {
+            await saveAnalysisFrame({
+              sessionId,
+              frameNumber: fa.frameNumber,
+              timestamp: fa.timestamp,
+              analysis: fa.analysis,
+              confidence: fa.confidence,
+              findings: fa.findings,
+              supabasePath: fa.supabasePath,
+              supabaseUrl: fa.supabaseUrl
+            });
+          }
+
+          console.log(`Saved analysis session ${sessionId} to database`);
+        } catch (error) {
+          console.error('Failed to save to database:', error);
+          // Continue anyway - the analysis is still valid
+        }
+
         // Cleanup temp files
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 96, step: 'cleanup' })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 98, step: 'cleanup' })}\n\n`));
         await cleanup(framesDir);
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 100, results })}\n\n`));
