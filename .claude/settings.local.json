@@ -19,14 +19,16 @@
       "mcp__supabase__*",
       "mcp__context7__resolve-library-id",
       "mcp__supabase__list_projects",
-      "mcp__supabase__execute_sql"
+      "mcp__supabase__execute_sql",
+      "Bash(findstr:*)",
+      "Bash(if not exist \"c:\\Users\\Public\\work\\radio\\public\" mkdir \"c:\\Users\\Public\\work\\radio\\public\")"
     ],
     "deny": [],
     "ask": []
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase",
     "shadcn"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

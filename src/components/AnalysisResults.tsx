@@ -28,9 +28,42 @@ function formatSummaryAsMarkdown(summary: string): string {
   const lines = summary.split('\n');
   const formatted: string[] = [];
 
+  // Known radiology report section headings
+  const sectionHeadings = [
+    'PATIENT INFORMATION',
+    'EXAM DATE',
+    'EXAM TYPE',
+    'CLINICAL HISTORY',
+    'TECHNIQUE',
+    'COMPARISON',
+    'FINDINGS',
+    'IMPRESSION',
+    'RECOMMENDATION',
+    'Patient Information',
+    'Exam Date',
+    'Exam Type',
+    'Clinical History',
+    'Technique',
+    'Comparison',
+    'Findings',
+    'Impression',
+    'Recommendation'
+  ];
+
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i].trim();
-    if (!line) continue;
+    if (!line) {
+      // Preserve blank lines for spacing
+      formatted.push('\n');
+      continue;
+    }
+
+    // Check if this line is a section heading (with or without colon)
+    const lineWithoutColon = line.replace(/:$/, '').trim();
+    if (sectionHeadings.includes(lineWithoutColon)) {
+      formatted.push(`\n## ${lineWithoutColon}\n\n`);
+      continue;
+    }
 
     // Major section headings (all caps at start of line)
     if (/^([A-Z\s&]+)(?=\s[A-Z][a-z]|$)/.test(line)) {
@@ -47,7 +80,7 @@ function formatSummaryAsMarkdown(summary: string): string {
           heading === 'CLINICAL HISTORY' ||
           heading.split(/\s+/).every(word => word === word.toUpperCase() && word.length > 1)
         )) {
-          formatted.push(`\n## ${heading}\n`);
+          formatted.push(`\n## ${heading}\n\n`);
           if (rest) {
             formatted.push(rest);
           }
@@ -64,12 +97,14 @@ function formatSummaryAsMarkdown(summary: string): string {
 
     // Bullet points or asterisk lists
     if (/^[*•-]\s/.test(line)) {
-      formatted.push(`\n${line}\n`);
+      formatted.push(`${line}\n`);
       continue;
     }
 
-    // Bold labels (word followed by colon)
-    line = line.replace(/^([A-Za-z\s]+):/g, '**$1:**');
+    // Bold labels (word followed by colon) - but NOT section headings
+    if (!sectionHeadings.includes(lineWithoutColon)) {
+      line = line.replace(/^([A-Za-z\s]+):/g, '**$1:**');
+    }
 
     // Add the line
     formatted.push(line + ' ');
@@ -119,73 +154,48 @@ export default function AnalysisResults({ results, isAnalyzing }: AnalysisResult
 
         {/* Report Content */}
         <CardContent className="px-6 sm:px-8 py-6 sm:py-8 bg-white">
-          <div className="prose prose-sm sm:prose-base lg:prose-lg max-w-none">
+          <div className="font-mono text-sm leading-relaxed">
             <ReactMarkdown
               components={{
-                // Main section headers (PATIENT INFORMATION, EXAM TYPE, etc.)
-                h1: (props) => (
-                  <div className="mb-6 sm:mb-8 mt-8 sm:mt-10 first:mt-0">
-                    <h1
-                      className="text-lg sm:text-xl font-bold text-white bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-3 rounded-md shadow-md uppercase tracking-wide mb-4"
-                      {...props}
-                    />
-                  </div>
-                ),
-                // Section headings (FINDINGS, IMPRESSION, RECOMMENDATION, etc.)
+                // Section headings - clean text format
                 h2: (props) => (
-                  <div className="mb-4 sm:mb-6 mt-6 sm:mt-8">
-                    <h2
-                      className="text-base sm:text-lg font-bold text-gray-900 bg-gray-100 px-4 py-2.5 rounded-md border-l-4 border-blue-600 uppercase tracking-wide"
-                      {...props}
-                    />
-                  </div>
+                  <h2
+                    className="font-bold text-gray-900 mt-6 mb-2 first:mt-0 uppercase tracking-wide"
+                    {...props}
+                  />
                 ),
                 // Subsection headings
                 h3: (props) => (
                   <h3
-                    className="text-sm sm:text-base font-semibold text-gray-800 mt-4 sm:mt-5 mb-2 sm:mb-3 border-b border-gray-300 pb-1"
+                    className="font-semibold text-gray-800 mt-4 mb-2"
                     {...props}
                   />
                 ),
-                // Paragraphs
+                // Paragraphs - simple spacing
                 p: (props) => (
                   <p
-                    className="mb-3 sm:mb-4 text-sm sm:text-base leading-7 sm:leading-8 text-gray-700 font-['Georgia',_'Times_New_Roman',_serif]"
+                    className="mb-2 text-gray-700 whitespace-pre-wrap"
                     {...props}
                   />
                 ),
-                // Bold text (labels)
+                // Bold text (labels) - simple bold
                 strong: (props) => (
                   <strong
-                    className="font-bold text-gray-900 bg-yellow-50 px-1 py-0.5 rounded"
+                    className="font-bold text-gray-900"
                     {...props}
                   />
                 ),
-                // Unordered lists
+                // Unordered lists - simple bullets
                 ul: (props) => (
                   <ul
-                    className="list-none ml-0 mb-4 sm:mb-6 space-y-2 sm:space-y-3"
+                    className="mb-3 space-y-1"
                     {...props}
                   />
                 ),
-                // Ordered lists
-                ol: (props) => (
-                  <ol
-                    className="list-decimal list-outside ml-6 sm:ml-8 mb-4 sm:mb-6 space-y-2 sm:space-y-3"
-                    {...props}
-                  />
-                ),
-                // List items
+                // List items - simple formatting
                 li: (props) => (
                   <li
-                    className="text-gray-700 text-sm sm:text-base leading-7 sm:leading-8 pl-4 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-600 before:font-bold"
-                    {...props}
-                  />
-                ),
-                // Code/monospace text
-                code: (props) => (
-                  <code
-                    className="bg-gray-100 border border-gray-300 px-2 py-1 rounded text-xs sm:text-sm font-mono text-gray-800"
+                    className="text-gray-700"
                     {...props}
                   />
                 ),

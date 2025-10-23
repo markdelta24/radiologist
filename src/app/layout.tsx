@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MRI Analyzer",
+  title: "Radiology AI",
   description: "AI-powered medical imaging analysis tool for DICOM files",
   icons: {
     icon: [

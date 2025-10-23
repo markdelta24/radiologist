@@ -437,6 +437,12 @@ INPUT OBJECT (context):
 
 OUTPUT FORMAT (MUST MATCH EXACTLY)
 
+IMPORTANT FORMATTING RULES:
+- Each section heading (Patient Information, Exam Date, etc.) MUST start on a NEW LINE
+- Add a blank line before each section heading
+- Section headings should be followed by a colon
+- Content should start on the next line after the heading
+
 Patient Information:
 ${ctx.patient?.name ? `- Name: ${ctx.patient.name}` : ""}${ctx.patient?.id ? `\n- ID: ${ctx.patient.id}` : ""}${(ctx.patient?.age && ctx.patient?.sex) ? `\n- Age/Sex: ${ctx.patient.age}/${ctx.patient.sex}` : ""}${ctx.patient?.referring ? `\n- Referring Physician: ${ctx.patient.referring}` : ""}
 
