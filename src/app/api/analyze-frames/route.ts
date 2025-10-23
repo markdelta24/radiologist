@@ -69,10 +69,18 @@ export async function POST(request: NextRequest) {
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'loading_frames_from_storage' })}\n\n`));
 
+        // Smart frame sampling to avoid timeout with large datasets
+        const MAX_FRAMES_TO_ANALYZE = 80; // Limit to 80 frames to stay under timeout
+        const framesToAnalyze = frameCount <= MAX_FRAMES_TO_ANALYZE
+          ? Array.from({ length: frameCount }, (_, i) => i)
+          : Array.from({ length: MAX_FRAMES_TO_ANALYZE }, (_, i) => Math.floor(i * frameCount / MAX_FRAMES_TO_ANALYZE));
+
+        console.log(`Analyzing ${framesToAnalyze.length} representative frames out of ${frameCount} total`);
+
         // Load frames from Supabase Storage or base64 data
         const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string; supabasePath?: string; supabaseUrl?: string }[] = [];
 
-        for (let i = 0; i < frameCount; i++) {
+        for (const i of framesToAnalyze) {
           const frameUrl = formData.get(`frameUrl_${i}`) as string;
           const framePath = formData.get(`framePath_${i}`) as string;
           const timestamp = parseFloat(formData.get(`timestamp_${i}`) as string || '0');
