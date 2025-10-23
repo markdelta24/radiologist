@@ -1,8 +1,7 @@
 'use client';
 
 import ReactMarkdown from 'react-markdown';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 
 interface AnalysisResultsProps {
@@ -104,43 +103,92 @@ export default function AnalysisResults({ results, isAnalyzing }: AnalysisResult
 
   const analysis: OverallAnalysis = results;
 
-  const getUrgencyVariant = (urgency: string): "default" | "secondary" | "destructive" | "outline" => {
-    switch (urgency) {
-      case 'high': return 'destructive';
-      case 'medium': return 'default';
-      case 'low': return 'secondary';
-      default: return 'outline';
-    }
-  };
-
   return (
-    <div className="space-y-4 sm:space-y-6 font-['Helvetica',_'Arial',_sans-serif]">
-      <div className="text-center mb-4 sm:mb-6 px-4">
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3 sm:mb-4">
-          Analysis Results
-        </h2>
-        <Badge variant={getUrgencyVariant(analysis.urgency)} className="text-xs sm:text-sm px-3 sm:px-4 py-1.5 sm:py-2 font-semibold">
-          <span className="capitalize">{analysis.urgency} Priority</span>
-        </Badge>
-      </div>
+    <div className="max-w-5xl mx-auto space-y-6 px-4 sm:px-6 lg:px-8">
+      {/* Main Report Card */}
+      <Card className="shadow-xl border-0 overflow-hidden">
+        {/* Report Header */}
+        <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-blue-600 px-6 sm:px-8 py-4">
+          <div className="flex items-center gap-3">
+            <div className="w-1 h-8 bg-blue-600 rounded-full"></div>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+              RADIOLOGY REPORT
+            </h2>
+          </div>
+        </div>
 
-      <Card>
-        <CardHeader className="px-4 sm:px-6">
-          <CardTitle className="font-['Helvetica',_'Arial',_sans-serif] text-lg sm:text-xl">Summary</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 sm:px-6">
-          <div className="text-gray-800 leading-relaxed prose prose-sm sm:prose-base max-w-none font-['Helvetica',_'Arial',_sans-serif]">
+        {/* Report Content */}
+        <CardContent className="px-6 sm:px-8 py-6 sm:py-8 bg-white">
+          <div className="prose prose-sm sm:prose-base lg:prose-lg max-w-none">
             <ReactMarkdown
               components={{
-                h1: (props) => <h1 className="text-xl sm:text-2xl font-bold text-gray-900 mt-6 sm:mt-8 mb-3 sm:mb-4 border-b-2 border-gray-200 pb-2" {...props} />,
-                h2: (props) => <h2 className="text-lg sm:text-xl font-bold text-gray-900 mt-4 sm:mt-6 mb-2 sm:mb-3 uppercase tracking-wide" {...props} />,
-                h3: (props) => <h3 className="text-base sm:text-lg font-semibold text-gray-800 mt-3 sm:mt-4 mb-2" {...props} />,
-                p: (props) => <p className="mb-2 sm:mb-3 text-sm sm:text-base leading-6 sm:leading-7 text-gray-700" {...props} />,
-                strong: (props) => <strong className="font-bold text-gray-900" {...props} />,
-                ul: (props) => <ul className="list-disc list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
-                ol: (props) => <ol className="list-decimal list-outside ml-4 sm:ml-6 mb-3 sm:mb-4 space-y-1 sm:space-y-2" {...props} />,
-                li: (props) => <li className="text-gray-700 text-sm sm:text-base leading-6 sm:leading-7" {...props} />,
-                code: (props) => <code className="bg-gray-100 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm font-mono text-gray-800" {...props} />,
+                // Main section headers (PATIENT INFORMATION, EXAM TYPE, etc.)
+                h1: (props) => (
+                  <div className="mb-6 sm:mb-8 mt-8 sm:mt-10 first:mt-0">
+                    <h1
+                      className="text-lg sm:text-xl font-bold text-white bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-3 rounded-md shadow-md uppercase tracking-wide mb-4"
+                      {...props}
+                    />
+                  </div>
+                ),
+                // Section headings (FINDINGS, IMPRESSION, RECOMMENDATION, etc.)
+                h2: (props) => (
+                  <div className="mb-4 sm:mb-6 mt-6 sm:mt-8">
+                    <h2
+                      className="text-base sm:text-lg font-bold text-gray-900 bg-gray-100 px-4 py-2.5 rounded-md border-l-4 border-blue-600 uppercase tracking-wide"
+                      {...props}
+                    />
+                  </div>
+                ),
+                // Subsection headings
+                h3: (props) => (
+                  <h3
+                    className="text-sm sm:text-base font-semibold text-gray-800 mt-4 sm:mt-5 mb-2 sm:mb-3 border-b border-gray-300 pb-1"
+                    {...props}
+                  />
+                ),
+                // Paragraphs
+                p: (props) => (
+                  <p
+                    className="mb-3 sm:mb-4 text-sm sm:text-base leading-7 sm:leading-8 text-gray-700 font-['Georgia',_'Times_New_Roman',_serif]"
+                    {...props}
+                  />
+                ),
+                // Bold text (labels)
+                strong: (props) => (
+                  <strong
+                    className="font-bold text-gray-900 bg-yellow-50 px-1 py-0.5 rounded"
+                    {...props}
+                  />
+                ),
+                // Unordered lists
+                ul: (props) => (
+                  <ul
+                    className="list-none ml-0 mb-4 sm:mb-6 space-y-2 sm:space-y-3"
+                    {...props}
+                  />
+                ),
+                // Ordered lists
+                ol: (props) => (
+                  <ol
+                    className="list-decimal list-outside ml-6 sm:ml-8 mb-4 sm:mb-6 space-y-2 sm:space-y-3"
+                    {...props}
+                  />
+                ),
+                // List items
+                li: (props) => (
+                  <li
+                    className="text-gray-700 text-sm sm:text-base leading-7 sm:leading-8 pl-4 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-600 before:font-bold"
+                    {...props}
+                  />
+                ),
+                // Code/monospace text
+                code: (props) => (
+                  <code
+                    className="bg-gray-100 border border-gray-300 px-2 py-1 rounded text-xs sm:text-sm font-mono text-gray-800"
+                    {...props}
+                  />
+                ),
               }}
             >
               {formatSummaryAsMarkdown(analysis.summary)}
@@ -148,10 +196,6 @@ export default function AnalysisResults({ results, isAnalyzing }: AnalysisResult
           </div>
         </CardContent>
       </Card>
-
-      {/* Recommendations section removed as requested */}
-
-      {/* Per-frame details removed as requested; only overall analysis is shown */}
     </div>
   );
 }

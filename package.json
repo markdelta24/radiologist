@@ -24,6 +24,7 @@
     "dicom-parser": "^1.8.21",
     "ffmpeg-extract-frames": "^2.0.2",
     "formidable": "^3.5.4",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.546.0",
     "multer": "^2.0.2",
     "next": "15.5.4",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@types/jszip": "^3.4.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

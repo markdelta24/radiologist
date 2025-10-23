@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import JSZip from 'jszip';
 import { ClientVideoProcessor } from '@/lib/clientVideoProcessor';
 import { DicomProcessor } from '@/lib/dicomProcessor';
 import { uploadVideoToSupabase, uploadDicomFilesToSupabase, uploadFramesInBatches } from '@/lib/supabase';
@@ -46,7 +47,37 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  // Extract DICOM files from ZIP
+  const extractDicomFromZip = async (zipFile: File): Promise<File[]> => {
+    try {
+      const zip = new JSZip();
+      const zipData = await zip.loadAsync(zipFile);
+      const dicomFiles: File[] = [];
+
+      // Iterate through all files in the ZIP
+      for (const [filename, file] of Object.entries(zipData.files)) {
+        // Skip directories and non-DICOM files
+        if (file.dir || (!filename.toLowerCase().endsWith('.dcm') && !filename.toLowerCase().endsWith('.dicom'))) {
+          continue;
+        }
+
+        // Extract the file as a blob
+        const blob = await file.async('blob');
+        // Create a File object with the original filename
+        const extractedFile = new File([blob], filename.split('/').pop() || filename, {
+          type: 'application/dicom'
+        });
+        dicomFiles.push(extractedFile);
+      }
+
+      return dicomFiles;
+    } catch (error) {
+      console.error('Error extracting ZIP file:', error);
+      throw new Error('Failed to extract ZIP file');
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
@@ -56,24 +87,46 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
       if (uploadMode === 'video') {
         setSelectedFile(files[0]);
       } else {
-        // DICOM mode - accept multiple files
-        const fileArray = Array.from(files).filter(file =>
-          file.name.endsWith('.dcm') || file.name.endsWith('.dicom')
-        );
-        setDicomFiles(fileArray);
+        // DICOM mode - accept multiple files or ZIP
+        const fileArray = Array.from(files);
+        let dicomFileArray: File[] = [];
+
+        for (const file of fileArray) {
+          if (file.name.toLowerCase().endsWith('.zip')) {
+            // Extract DICOM files from ZIP
+            const extractedFiles = await extractDicomFromZip(file);
+            dicomFileArray = [...dicomFileArray, ...extractedFiles];
+          } else if (file.name.endsWith('.dcm') || file.name.endsWith('.dicom')) {
+            dicomFileArray.push(file);
+          }
+        }
+
+        setDicomFiles(dicomFileArray);
       }
     }
   };
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
       if (uploadMode === 'video') {
         setSelectedFile(files[0]);
       } else {
-        // DICOM mode - accept multiple files
+        // DICOM mode - accept multiple files or ZIP
         const fileArray = Array.from(files);
-        setDicomFiles(fileArray);
+        let dicomFileArray: File[] = [];
+
+        for (const file of fileArray) {
+          if (file.name.toLowerCase().endsWith('.zip')) {
+            // Extract DICOM files from ZIP
+            const extractedFiles = await extractDicomFromZip(file);
+            dicomFileArray = [...dicomFileArray, ...extractedFiles];
+          } else if (file.name.endsWith('.dcm') || file.name.endsWith('.dicom')) {
+            dicomFileArray.push(file);
+          }
+        }
+
+        setDicomFiles(dicomFileArray);
       }
     }
   };
@@ -218,7 +271,7 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
       } else {
         // DICOM MODE PROCESSING
         setUploadProgress(5);
-        setSteps(['Uploading DICOM files to Supabase Storage']);
+        setSteps(['Uploading DICOM files']);
 
         const timestamp = Date.now();
         const patientID = `patient-${timestamp}`;
@@ -250,7 +303,7 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
         const uploadedFrames = await uploadFramesInBatches(
           framesForUpload,
           sessionId,
-          10,
+          5, // Reduced batch size to prevent timeouts
           (uploaded, total) => {
             const progress = 15 + (uploaded / total) * 25; // 15-40%
             setUploadProgress(progress);
@@ -502,7 +555,7 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
               <input
                 ref={dicomInputRef}
                 type="file"
-                accept=".dcm,.dicom"
+                accept=".dcm,.dicom,.zip"
                 multiple
                 onChange={handleFileInput}
                 className="hidden"
@@ -527,10 +580,10 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
                   <p className="text-sm sm:text-base text-gray-600 mb-3 sm:mb-4 px-2">
                     {dicomFiles.length > 0
                       ? 'Files selected - ready to proceed'
-                      : 'Drag and drop DICOM files or folder here, or click to browse'}
+                      : 'Drag and drop DICOM files or ZIP archive here, or click to browse'}
                   </p>
                   <p className="text-xs sm:text-sm text-gray-500 px-2">
-                    Supports .dcm, .dicom files (multiple files or folders)
+                    Supports .dcm, .dicom files or .zip archives containing DICOM files
                   </p>
 
                   {/* Display selected DICOM files */}

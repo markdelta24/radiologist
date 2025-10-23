@@ -166,6 +166,61 @@ export async function uploadFrameToSupabase(
  * @param sessionId - The session/analysis ID for organizing frames
  * @returns The path and URL of the uploaded frame
  */
+async function uploadWithRetry(
+  blob: Blob,
+  filePath: string,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<{ path: string }> {
+  let lastError: any;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const { data, error } = await supabase.storage
+        .from('medical-frames')
+        .upload(filePath, blob, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: 'image/png'
+        });
+
+      if (error) {
+        // Check if it's a retryable error
+        if (error.message.includes('timeout') || error.message.includes('504') || error.message.includes('503')) {
+          lastError = error;
+          const delay = baseDelay * Math.pow(2, attempt);
+          console.warn(`Upload timeout on attempt ${attempt + 1}/${maxRetries}, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
+      }
+
+      return { path: data.path };
+    } catch (error: any) {
+      lastError = error;
+
+      // Check if it's a retryable error (network/timeout)
+      const isRetryable = error.message?.includes('timeout') ||
+                         error.message?.includes('504') ||
+                         error.message?.includes('503') ||
+                         error.message?.includes('network') ||
+                         error.name === 'NetworkError';
+
+      if (isRetryable && attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.warn(`Upload error on attempt ${attempt + 1}/${maxRetries}, retrying in ${delay}ms...`, error.message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`Failed to upload after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+}
+
 export async function uploadFrameFromClient(
   base64Data: string,
   fileName: string,
@@ -183,25 +238,16 @@ export async function uploadFrameFromClient(
   const byteArray = new Uint8Array(byteNumbers);
   const blob = new Blob([byteArray], { type: 'image/png' });
 
-  const { data, error } = await supabase.storage
-    .from('medical-frames')
-    .upload(filePath, blob, {
-      cacheControl: '3600',
-      upsert: false,
-      contentType: 'image/png'
-    });
-
-  if (error) {
-    throw new Error(`Failed to upload frame: ${error.message}`);
-  }
+  // Upload with retry logic
+  const { path } = await uploadWithRetry(blob, filePath);
 
   // Get the public URL
   const { data: urlData } = supabase.storage
     .from('medical-frames')
-    .getPublicUrl(data.path);
+    .getPublicUrl(path);
 
   return {
-    path: data.path,
+    path,
     url: urlData.publicUrl
   };
 }
