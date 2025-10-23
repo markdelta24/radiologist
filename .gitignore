@@ -37,3 +37,4 @@ next-env.d.ts
 # Temp files
 temp/
 .claude
+.mcp.json

@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react';
 import { ClientVideoProcessor } from '@/lib/clientVideoProcessor';
 import { DicomProcessor } from '@/lib/dicomProcessor';
-import { uploadVideoToSupabase, uploadDicomFilesToSupabase } from '@/lib/supabase';
+import { uploadVideoToSupabase, uploadDicomFilesToSupabase, uploadFramesInBatches } from '@/lib/supabase';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -149,6 +149,10 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
       formData.append('uploadMode', uploadMode);
       formData.append('problem', problem.trim());
 
+      // Generate session ID upfront
+      const sessionId = `analysis_${Date.now()}`;
+      formData.append('sessionId', sessionId);
+
       if (uploadMode === 'video') {
         // VIDEO MODE PROCESSING
         setUploadProgress(5);
@@ -165,23 +169,48 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
         setSteps(prev => [...prev, 'Extracting frames from video']);
         const videoProcessor = new ClientVideoProcessor();
 
-        setUploadProgress(20);
+        setUploadProgress(15);
         const frames = await videoProcessor.extractFrames(selectedFile!, {
           fps,
           maxFrames: Math.min(fps * 30, 200)
         });
 
-        setUploadProgress(40);
+        setUploadProgress(20);
         setSteps(prev => [...prev, `Extracted ${frames.length} frames`]);
 
-        formData.append('frameCount', frames.length.toString());
+        // Upload frames to Supabase Storage
+        setSteps(prev => [...prev, 'Uploading frames to storage']);
+        const uploadedFrames = await uploadFramesInBatches(
+          frames,
+          sessionId,
+          10,
+          (uploaded, total) => {
+            const progress = 20 + (uploaded / total) * 20; // 20-40%
+            setUploadProgress(progress);
+            setSteps(prev => {
+              const lastStep = prev[prev.length - 1];
+              if (lastStep.startsWith('Uploaded')) {
+                return [...prev.slice(0, -1), `Uploaded ${uploaded}/${total} frames`];
+              }
+              return [...prev, `Uploaded ${uploaded}/${total} frames`];
+            });
+          }
+        );
+
+        setUploadProgress(40);
+        setSteps(prev => [...prev, 'All frames uploaded to storage']);
+
+        formData.append('frameCount', uploadedFrames.length.toString());
         formData.append('fps', fps.toString());
         formData.append('videoUrl', videoUrl);
         formData.append('videoPath', videoPath);
 
-        frames.forEach((frame, index) => {
-          formData.append(`frame_${index}`, frame.dataUrl);
+        // Send frame URLs instead of base64 data
+        uploadedFrames.forEach((frame, index) => {
+          formData.append(`frameUrl_${index}`, frame.url);
+          formData.append(`framePath_${index}`, frame.path);
           formData.append(`timestamp_${index}`, frame.timestamp.toString());
+          formData.append(`frameNumber_${index}`, frame.frameNumber.toString());
         });
 
         // Cleanup video processor
@@ -198,38 +227,66 @@ export default function SinglePageUpload({ onAnalysisStart, onAnalysisComplete, 
         // Upload DICOM files to Supabase Storage
         const uploadedFiles = await uploadDicomFilesToSupabase(dicomFiles, folderName);
 
-        setUploadProgress(15);
-        setSteps(prev => [...prev, `Uploaded ${uploadedFiles.length} files to storage`]);
+        setUploadProgress(10);
+        setSteps(prev => [...prev, `Uploaded ${uploadedFiles.length} DICOM files to storage`]);
 
-        // Process DICOM files
+        // Process DICOM files to extract images
         setSteps(prev => [...prev, 'Processing DICOM files']);
         const dicomProcessor = new DicomProcessor();
 
         const processedDicom = await dicomProcessor.processFiles(dicomFiles);
 
-        setUploadProgress(30);
+        setUploadProgress(15);
         setSteps(prev => [...prev, `Processed ${processedDicom.length} images`]);
+
+        // Upload processed frames to Supabase Storage
+        setSteps(prev => [...prev, 'Uploading processed frames to storage']);
+        const framesForUpload = processedDicom.map((dicom, index) => ({
+          dataUrl: dicom.imageDataUrl,
+          timestamp: index, // Use index as timestamp for DICOM
+          frameNumber: index + 1
+        }));
+
+        const uploadedFrames = await uploadFramesInBatches(
+          framesForUpload,
+          sessionId,
+          10,
+          (uploaded, total) => {
+            const progress = 15 + (uploaded / total) * 25; // 15-40%
+            setUploadProgress(progress);
+            setSteps(prev => {
+              const lastStep = prev[prev.length - 1];
+              if (lastStep.startsWith('Uploaded') && lastStep.includes('frames')) {
+                return [...prev.slice(0, -1), `Uploaded ${uploaded}/${total} frames`];
+              }
+              return [...prev, `Uploaded ${uploaded}/${total} frames`];
+            });
+          }
+        );
+
+        setUploadProgress(40);
+        setSteps(prev => [...prev, 'All frames uploaded to storage']);
 
         // Add storage info to form data
         formData.append('dicomFolder', folderName);
-        formData.append('frameCount', processedDicom.length.toString());
+        formData.append('frameCount', uploadedFrames.length.toString());
         formData.append('modality', processedDicom[0]?.metadata.modality || 'DICOM');
         formData.append('patientID', processedDicom[0]?.metadata.patientID || patientID);
 
-        // Add URLs of uploaded files
+        // Add URLs of uploaded DICOM files (original files)
         uploadedFiles.forEach((file, index) => {
           formData.append(`dicomUrl_${index}`, file.url);
           formData.append(`dicomPath_${index}`, file.path);
         });
 
-        // Add processed images and metadata
-        processedDicom.forEach((dicom, index) => {
-          formData.append(`frame_${index}`, dicom.imageDataUrl);
-          formData.append(`metadata_${index}`, JSON.stringify(dicom.metadata));
-          formData.append(`fileName_${index}`, dicom.fileName);
+        // Send frame URLs and metadata instead of base64 data
+        uploadedFrames.forEach((frame, index) => {
+          formData.append(`frameUrl_${index}`, frame.url);
+          formData.append(`framePath_${index}`, frame.path);
+          formData.append(`frameNumber_${index}`, frame.frameNumber.toString());
+          formData.append(`metadata_${index}`, JSON.stringify(processedDicom[index]?.metadata || {}));
+          formData.append(`fileName_${index}`, processedDicom[index]?.fileName || `frame_${index}`);
         });
-
-        setUploadProgress(40);
       }
 
       setUploadProgress(50);

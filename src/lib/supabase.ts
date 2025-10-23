@@ -123,7 +123,7 @@ export async function deletePatientFolderFromSupabase(folderPath: string) {
 }
 
 /**
- * Upload a frame image to Supabase Storage
+ * Upload a frame image to Supabase Storage (server-side with Buffer)
  * @param buffer - The image buffer
  * @param fileName - The name to save the file as
  * @param sessionId - The session/analysis ID for organizing frames
@@ -157,6 +157,113 @@ export async function uploadFrameToSupabase(
     path: data.path,
     url: urlData.publicUrl
   };
+}
+
+/**
+ * Upload a frame image to Supabase Storage (client-side from base64)
+ * @param base64Data - The base64 image data URL
+ * @param fileName - The name to save the file as
+ * @param sessionId - The session/analysis ID for organizing frames
+ * @returns The path and URL of the uploaded frame
+ */
+export async function uploadFrameFromClient(
+  base64Data: string,
+  fileName: string,
+  sessionId: string
+) {
+  const filePath = `${sessionId}/${fileName}`;
+
+  // Convert base64 to blob
+  const base64String = base64Data.split(',')[1];
+  const byteCharacters = atob(base64String);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: 'image/png' });
+
+  const { data, error } = await supabase.storage
+    .from('medical-frames')
+    .upload(filePath, blob, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: 'image/png'
+    });
+
+  if (error) {
+    throw new Error(`Failed to upload frame: ${error.message}`);
+  }
+
+  // Get the public URL
+  const { data: urlData } = supabase.storage
+    .from('medical-frames')
+    .getPublicUrl(data.path);
+
+  return {
+    path: data.path,
+    url: urlData.publicUrl
+  };
+}
+
+/**
+ * Upload multiple frames to Supabase Storage in batches (client-side)
+ * @param frames - Array of frame data with base64 data URLs
+ * @param sessionId - The session/analysis ID for organizing frames
+ * @param batchSize - Number of frames to upload concurrently
+ * @param onProgress - Optional callback for progress updates
+ * @returns Array of uploaded frame info
+ */
+export async function uploadFramesInBatches(
+  frames: Array<{ dataUrl: string; timestamp: number; frameNumber: number }>,
+  sessionId: string,
+  batchSize: number = 10,
+  onProgress?: (uploaded: number, total: number) => void
+): Promise<Array<{ path: string; url: string; frameNumber: number; timestamp: number }>> {
+  const results: Array<{ path: string; url: string; frameNumber: number; timestamp: number }> = [];
+
+  for (let i = 0; i < frames.length; i += batchSize) {
+    const batch = frames.slice(i, i + batchSize);
+
+    const batchPromises = batch.map(async (frame) => {
+      const fileName = `frame_${String(frame.frameNumber).padStart(3, '0')}.png`;
+      const { path, url } = await uploadFrameFromClient(frame.dataUrl, fileName, sessionId);
+      return {
+        path,
+        url,
+        frameNumber: frame.frameNumber,
+        timestamp: frame.timestamp
+      };
+    });
+
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+
+    if (onProgress) {
+      onProgress(results.length, frames.length);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Download a frame from Supabase Storage
+ * @param path - The storage path of the frame
+ * @returns The frame data as a Buffer
+ */
+export async function downloadFrameFromSupabase(path: string): Promise<Buffer> {
+  const { data, error } = await supabase.storage
+    .from('medical-frames')
+    .download(path);
+
+  if (error || !data) {
+    throw new Error(`Failed to download frame: ${error?.message || 'No data'}`);
+  }
+
+  // Convert blob to buffer
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
 /**

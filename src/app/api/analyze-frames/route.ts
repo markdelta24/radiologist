@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
         const formData = await request.formData();
         const frameCount = parseInt(formData.get('frameCount') as string || '0');
         const problem = (formData.get('problem') as string) || '';
+        const sessionId = (formData.get('sessionId') as string) || `analysis_${Date.now()}`;
 
         if (frameCount === 0) {
           throw new Error('No frames provided');
@@ -54,61 +55,76 @@ export async function POST(request: NextRequest) {
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 10, step: 'parsing_form_data' })}\n\n`));
 
-        // Create temp directory for frames and session ID for Supabase
+        // Create temp directory for frames
         const tempDir = path.join(process.cwd(), 'temp');
-        const sessionId = `analysis_${Date.now()}`;
         const framesDir = path.join(tempDir, `frames_${Date.now()}`);
         await fs.mkdir(tempDir, { recursive: true });
         await fs.mkdir(framesDir, { recursive: true });
 
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'saving_frames' })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'loading_frames_from_storage' })}\n\n`));
 
-        // Extract frame data from form and save to files
+        // Load frames from Supabase Storage or base64 data
         const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string; supabasePath?: string; supabaseUrl?: string }[] = [];
 
         for (let i = 0; i < frameCount; i++) {
-          const dataUrl = formData.get(`frame_${i}`) as string;
+          const frameUrl = formData.get(`frameUrl_${i}`) as string;
+          const framePath = formData.get(`framePath_${i}`) as string;
           const timestamp = parseFloat(formData.get(`timestamp_${i}`) as string || '0');
+          const frameNumber = parseInt(formData.get(`frameNumber_${i}`) as string || String(i + 1));
 
-          if (dataUrl) {
-            // Save frame as image file
-            const frameFileName = `frame_${String(i + 1).padStart(3, '0')}.png`;
-            const framePath = path.join(framesDir, frameFileName);
-
-            // Convert base64 to buffer and save
-            const base64Data = dataUrl.split(',')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
-            await fs.writeFile(framePath, buffer);
-
-            // Upload to Supabase
+          if (frameUrl && framePath) {
+            // Frame is already uploaded to Supabase - fetch it
             try {
-              const { path: supabasePath, url: supabaseUrl } = await uploadFrameToSupabase(
-                buffer,
-                frameFileName,
-                sessionId
-              );
+              const response = await fetch(frameUrl);
+              if (!response.ok) {
+                throw new Error(`Failed to fetch frame from ${frameUrl}`);
+              }
+              const arrayBuffer = await response.arrayBuffer();
+              const buffer = Buffer.from(arrayBuffer);
+
+              // Save locally for Gemini processing
+              const frameFileName = `frame_${String(frameNumber).padStart(3, '0')}.png`;
+              const localFramePath = path.join(framesDir, frameFileName);
+              await fs.writeFile(localFramePath, buffer);
+
+              // Convert to base64 for Gemini
+              const base64Data = buffer.toString('base64');
+              const dataUrl = `data:image/png;base64,${base64Data}`;
 
               frames.push({
                 dataUrl,
                 timestamp,
-                frameNumber: i + 1,
-                filePath: framePath,
-                supabasePath,
-                supabaseUrl
+                frameNumber,
+                filePath: localFramePath,
+                supabasePath: framePath,
+                supabaseUrl: frameUrl
               });
 
-              console.log(`Saved frame ${i + 1} to: ${framePath}`);
-              console.log(`Uploaded frame ${i + 1} to Supabase: ${supabaseUrl}`);
+              console.log(`Loaded frame ${frameNumber} from Supabase: ${frameUrl}`);
             } catch (error) {
-              console.error(`Failed to upload frame ${i + 1} to Supabase:`, error);
-              // Continue with local file only
+              console.error(`Failed to load frame ${frameNumber} from Supabase:`, error);
+              throw new Error(`Failed to load frame ${frameNumber} from storage`);
+            }
+          } else {
+            // Fallback: frame sent as base64 (backward compatibility)
+            const dataUrl = formData.get(`frame_${i}`) as string;
+            if (dataUrl) {
+              const frameFileName = `frame_${String(frameNumber).padStart(3, '0')}.png`;
+              const localFramePath = path.join(framesDir, frameFileName);
+
+              // Convert base64 to buffer and save
+              const base64Data = dataUrl.split(',')[1];
+              const buffer = Buffer.from(base64Data, 'base64');
+              await fs.writeFile(localFramePath, buffer);
+
               frames.push({
                 dataUrl,
                 timestamp,
-                frameNumber: i + 1,
-                filePath: framePath
+                frameNumber,
+                filePath: localFramePath
               });
-              console.log(`Saved frame ${i + 1} to: ${framePath} (local only)`);
+
+              console.log(`Saved frame ${frameNumber} from base64 data`);
             }
           }
         }
