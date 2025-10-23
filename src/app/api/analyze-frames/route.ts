@@ -56,11 +56,15 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 10, step: 'parsing_form_data' })}\n\n`));
 
         // Create temp directory for frames
-        // Use /tmp in production (Vercel) or local temp directory
-        const isProduction = process.env.VERCEL === '1';
+        // Use /tmp in production (Vercel/Netlify) or local temp directory
+        const isProduction = process.env.VERCEL === '1' || process.env.NETLIFY === 'true' || process.env.NODE_ENV === 'production';
         const tempDir = isProduction ? '/tmp' : path.join(process.cwd(), 'temp');
         const framesDir = path.join(tempDir, `frames_${Date.now()}`);
-        await fs.mkdir(tempDir, { recursive: true });
+
+        // Only try to create parent temp dir if not /tmp (it already exists in serverless)
+        if (!isProduction) {
+          await fs.mkdir(tempDir, { recursive: true });
+        }
         await fs.mkdir(framesDir, { recursive: true });
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'loading_frames_from_storage' })}\n\n`));
