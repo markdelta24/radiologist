@@ -69,57 +69,64 @@ export async function POST(request: NextRequest) {
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: 15, step: 'loading_frames_from_storage' })}\n\n`));
 
-        // Smart frame sampling to avoid timeout with large datasets
-        const MAX_FRAMES_TO_ANALYZE = 80; // Limit to 80 frames to stay under timeout
-        const framesToAnalyze = frameCount <= MAX_FRAMES_TO_ANALYZE
-          ? Array.from({ length: frameCount }, (_, i) => i)
-          : Array.from({ length: MAX_FRAMES_TO_ANALYZE }, (_, i) => Math.floor(i * frameCount / MAX_FRAMES_TO_ANALYZE));
+        // Process ALL frames in batches - critical for medical diagnosis
+        console.log(`Analyzing all ${frameCount} frames in batches for comprehensive medical analysis`);
 
-        console.log(`Analyzing ${framesToAnalyze.length} representative frames out of ${frameCount} total`);
-
-        // Load frames from Supabase Storage or base64 data
+        // Download and process frames in parallel batches to optimize speed
+        const BATCH_SIZE = 50; // Process 50 frames at a time
         const frames: { dataUrl: string; timestamp: number; frameNumber: number; filePath: string; supabasePath?: string; supabaseUrl?: string }[] = [];
 
-        for (const i of framesToAnalyze) {
-          const frameUrl = formData.get(`frameUrl_${i}`) as string;
-          const framePath = formData.get(`framePath_${i}`) as string;
-          const timestamp = parseFloat(formData.get(`timestamp_${i}`) as string || '0');
-          const frameNumber = parseInt(formData.get(`frameNumber_${i}`) as string || String(i + 1));
+        for (let batchStart = 0; batchStart < frameCount; batchStart += BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, frameCount);
+          const batchProgress = 15 + ((batchStart / frameCount) * 25); // 15-40%
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ progress: batchProgress, step: `loading_batch_${Math.floor(batchStart / BATCH_SIZE) + 1}` })}\n\n`));
 
-          if (frameUrl && framePath) {
-            // Frame is already uploaded to Supabase - fetch it
-            try {
-              const response = await fetch(frameUrl);
-              if (!response.ok) {
-                throw new Error(`Failed to fetch frame from ${frameUrl}`);
-              }
-              const arrayBuffer = await response.arrayBuffer();
-              const buffer = Buffer.from(arrayBuffer);
+          // Download frames in parallel for this batch
+          const batchPromises = [];
 
-              // Save locally for Gemini processing
-              const frameFileName = `frame_${String(frameNumber).padStart(3, '0')}.png`;
-              const localFramePath = path.join(framesDir, frameFileName);
-              await fs.writeFile(localFramePath, buffer);
+          for (let i = batchStart; i < batchEnd; i++) {
+            const frameUrl = formData.get(`frameUrl_${i}`) as string;
+            const framePath = formData.get(`framePath_${i}`) as string;
+            const timestamp = parseFloat(formData.get(`timestamp_${i}`) as string || '0');
+            const frameNumber = parseInt(formData.get(`frameNumber_${i}`) as string || String(i + 1));
 
-              // Convert to base64 for Gemini
-              const base64Data = buffer.toString('base64');
-              const dataUrl = `data:image/png;base64,${base64Data}`;
+            if (frameUrl && framePath) {
+              const downloadPromise = (async () => {
+                try {
+                  const response = await fetch(frameUrl);
+                  if (!response.ok) {
+                    throw new Error(`Failed to fetch frame from ${frameUrl}`);
+                  }
+                  const arrayBuffer = await response.arrayBuffer();
+                  const buffer = Buffer.from(arrayBuffer);
 
-              frames.push({
-                dataUrl,
-                timestamp,
-                frameNumber,
-                filePath: localFramePath,
-                supabasePath: framePath,
-                supabaseUrl: frameUrl
-              });
+                  // Save locally for Gemini processing
+                  const frameFileName = `frame_${String(frameNumber).padStart(3, '0')}.png`;
+                  const localFramePath = path.join(framesDir, frameFileName);
+                  await fs.writeFile(localFramePath, buffer);
 
-              console.log(`Loaded frame ${frameNumber} from Supabase: ${frameUrl}`);
-            } catch (error) {
-              console.error(`Failed to load frame ${frameNumber} from Supabase:`, error);
-              throw new Error(`Failed to load frame ${frameNumber} from storage`);
-            }
-          } else {
+                  // Convert to base64 for Gemini
+                  const base64Data = buffer.toString('base64');
+                  const dataUrl = `data:image/png;base64,${base64Data}`;
+
+                  console.log(`Loaded frame ${frameNumber} from Supabase`);
+
+                  return {
+                    dataUrl,
+                    timestamp,
+                    frameNumber,
+                    filePath: localFramePath,
+                    supabasePath: framePath,
+                    supabaseUrl: frameUrl
+                  };
+                } catch (error) {
+                  console.error(`Failed to load frame ${frameNumber} from Supabase:`, error);
+                  throw new Error(`Failed to load frame ${frameNumber} from storage`);
+                }
+              })();
+
+              batchPromises.push(downloadPromise);
+            } else {
             // Fallback: frame sent as base64 (backward compatibility)
             const dataUrl = formData.get(`frame_${i}`) as string;
             if (dataUrl) {
@@ -140,6 +147,14 @@ export async function POST(request: NextRequest) {
 
               console.log(`Saved frame ${frameNumber} from base64 data`);
             }
+          }
+          }
+
+          // Wait for all frames in this batch to download
+          if (batchPromises.length > 0) {
+            const batchResults = await Promise.all(batchPromises);
+            frames.push(...batchResults);
+            console.log(`Batch complete: Loaded ${batchResults.length} frames`);
           }
         }
 
