@@ -57,7 +57,7 @@ export default function VideoUpload({ onAnalysisStart, onAnalysisComplete, onBac
   };
 
   const validateFile = (file: File): { valid: boolean; error?: string } => {
-    const validTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/wmv'];
+    const validTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv'];
     const maxSize = 100 * 1024 * 1024; // 100MB
 
     if (!validTypes.includes(file.type)) {
@@ -231,7 +231,7 @@ export default function VideoUpload({ onAnalysisStart, onAnalysisComplete, onBac
         <input
           ref={fileInputRef}
           type="file"
-          accept="video/*"
+          accept="video/mp4,video/avi,video/mov,video/quicktime,video/x-msvideo,video/x-ms-wmv,.mp4,.avi,.mov,.wmv"
           onChange={handleFileInput}
           className="hidden"
           disabled={isAnalyzing}
